@@ -13,28 +13,69 @@ import groovy.util.logging.Slf4j
 @Slf4j
 abstract class PersistentAsynchronousTask extends AbstractAsynchronousTask {
     /**
+     * AsynchronousTaskService.
+     */
+    AsynchronousTaskService asynchronousTaskService
+
+    PersistentAsynchronousTask(AsynchronousTaskService asynchronousTaskService) {
+        this.asynchronousTaskService = asynchronousTaskService
+    }
+
+    /**
      * Creates a brand new task instance.
      */
-    PersistentAsynchronousTask(String taskName, String description) {
-        withSession {
-            AsynchronousTaskDomain domain = new AsynchronousTaskDomain()
+    PersistentAsynchronousTask(AsynchronousTaskService asynchronousTaskService, String taskName, String description) {
+        this(asynchronousTaskService)
 
-            domain.name = taskName
-            domain.description = description
+        AsynchronousTaskDomain domain = asynchronousTaskService.makeAndSaveAsynchronousTaskDomain(taskName, description)
+        taskId = domain.id
 
-            if (!domain.validate()) {
-                throw new ValidationException("can not create a domain instance for task ${getTaskName()} due to validation errors", domain.errors)
+        createdTime = domain.dateCreated
+        updatedTime = domain.lastUpdated
+
+        this.taskName = taskName
+        this.description = description
+    }
+
+    /**
+     * Loads an existing task.
+     *
+     * @param taskId
+     */
+    PersistentAsynchronousTask(AsynchronousTaskService asynchronousTaskService, int taskId) {
+        this(asynchronousTaskService)
+
+        try {
+            AsynchronousTaskDomain domain = asynchronousTaskService.read(taskId)
+
+            if (!domain) {
+                throw new PersistentAsynchronousTaskNotFoundException("task with ID $taskId was not found")
             }
 
-            domain.save(flush: true, failOnError: true)
+            this.taskId = taskId
 
-            taskId = domain.id
+            taskName = domain.name
+            description = domain.description
 
             createdTime = domain.dateCreated
             updatedTime = domain.lastUpdated
+            startTime = domain.startTime
+            endTime = domain.endTime
 
-            this.taskName = taskName
-            this.description = description
+            errorCode = domain.errorCode
+            resolutionCode = domain.resolutionCode
+            progress = domain.progress
+            currentOperation = domain.currentOperation
+            state = domain.state
+
+            internalTaskData = unserialize(domain.internalTaskData)
+            results = unserialize(domain.results)
+        }
+        catch (PersistentAsynchronousTaskNotFoundException e) {
+            throw e
+        }
+        catch (Exception e) {
+            throw new PersistentAsynchronousTaskLoadException("Unable to load task with ID '$taskId'", e)
         }
     }
 
@@ -42,32 +83,26 @@ abstract class PersistentAsynchronousTask extends AbstractAsynchronousTask {
      * Saves the task to the database.
      */
     void save() {
-        withSession {
-            AsynchronousTaskDomain domain = AsynchronousTaskDomain.get(taskId)
+        AsynchronousTaskDomain domain = asynchronousTaskService.get(taskId)
 
-            domain.name = getTaskName()
-            domain.description = getDescription()
+        domain.name = getTaskName()
+        domain.description = getDescription()
 
-            domain.dateCreated = getCreatedTime()
-            domain.lastUpdated = getUpdatedTime()
-            domain.startTime = getStartTime()
-            domain.endTime = getEndTime()
+        domain.dateCreated = getCreatedTime()
+        domain.lastUpdated = getUpdatedTime()
+        domain.startTime = getStartTime()
+        domain.endTime = getEndTime()
 
-            domain.errorCode = getErrorCode()
-            domain.resolutionCode = getResolutionCode()
-            domain.progress = getProgress()
-            domain.currentOperation = getCurrentOperation()
-            domain.state = getState()
+        domain.errorCode = getErrorCode()
+        domain.resolutionCode = getResolutionCode()
+        domain.progress = getProgress()
+        domain.currentOperation = getCurrentOperation()
+        domain.state = getState()
 
-            domain.internalTaskData = serialize(getInternalTaskData())
-            domain.results = serialize(getResults())
+        domain.internalTaskData = serialize(getInternalTaskData())
+        domain.results = serialize(getResults())
 
-            if (!domain.validate()) {
-                throw new ValidationException("task ${getTaskName()} with ID ${domain.id} does not validate", domain.errors)
-            }
-
-            domain.save(flush: true, failOnError: true)
-        }
+        asynchronousTaskService.save(domain)
     }
 
     /**
@@ -81,48 +116,6 @@ abstract class PersistentAsynchronousTask extends AbstractAsynchronousTask {
         c.call()
 
         save()
-    }
-
-    /**
-     * Loads an existing task.
-     *
-     * @param taskId
-     */
-    PersistentAsynchronousTask(int taskId) {
-        try {
-            withSession {
-                AsynchronousTaskDomain domain = AsynchronousTaskDomain.read(taskId)
-
-                if (!domain) {
-                    throw new PersistentAsynchronousTaskNotFoundException("task with ID $taskId was not found")
-                }
-
-                this.taskId = taskId
-
-                taskName = domain.name
-                description = domain.description
-
-                createdTime = domain.dateCreated
-                updatedTime = domain.lastUpdated
-                startTime = domain.startTime
-                endTime = domain.endTime
-
-                errorCode = domain.errorCode
-                resolutionCode = domain.resolutionCode
-                progress = domain.progress
-                currentOperation = domain.currentOperation
-                state = domain.state
-
-                internalTaskData = unserialize(domain.internalTaskData)
-                results = unserialize(domain.results)
-            }
-        }
-        catch (PersistentAsynchronousTaskNotFoundException e) {
-            throw e
-        }
-        catch (Exception e) {
-            throw new PersistentAsynchronousTaskLoadException("Unable to load task with ID '$taskId'", e)
-        }
     }
 
     /**
